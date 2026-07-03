@@ -11,49 +11,82 @@ environment to run `realtime_orcahand.py`.
 
 From a fresh clone:
 
+Windows PowerShell:
+
 ```powershell
-cd "\Real Time Detect With Orca"
+cd Orcahand_Realtime_Detect/
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+macOS/Linux:
+
+```bash
+cd Orcahand_Realtime_Detect/
+python3 -m venv .venv
+./.venv/bin/python -m pip install -r requirements.txt
 ```
 
 ## Run
 
 Primary GUI:
 
+Windows PowerShell:
+
 ```powershell
 .\.venv\Scripts\python.exe realtime_orcahand.py --preview-only
 ```
 
+macOS/Linux:
+
+```bash
+./.venv/bin/python realtime_orcahand.py --preview-only
+```
+
 For live hardware output:
+
+Windows PowerShell:
 
 ```powershell
 .\.venv\Scripts\python.exe realtime_orcahand.py --live
 ```
 
+macOS/Linux:
+
+```bash
+./.venv/bin/python realtime_orcahand.py --live
+```
+
 Useful checks:
 
+Windows PowerShell:
+
 ```powershell
-.\.venv\Scripts\python.exe realtime_orcahand.py --check
 .\.venv\Scripts\python.exe -m pytest -q
+```
+
+macOS/Linux:
+
+```bash
+./.venv/bin/python -m pytest -q
 ```
 
 ## Editor Setup
 
 The workspace settings are tuned for VS Code to prefer the root `.venv` and to
-resolve imports from both the repo root and `vendor\orca_core`.
+resolve imports from both the repo root and `vendor/orca_core`.
 
-If VS Code asks you to pick an interpreter, select:
+If VS Code asks you to pick an interpreter, select the platform-specific
+environment Python:
 
 ```text
-${workspaceFolder}\.venv\Scripts\python.exe
+Windows: ${workspaceFolder}\.venv\Scripts\python.exe
+macOS/Linux: ${workspaceFolder}/.venv/bin/python
 ```
 
 ## Vendor Core
 
-`vendor/orca_core` is vendored in this repo for convenience. You do **not**
-need to activate its own virtual environment to run the main GUI.
+`vendor/orca_core` is vendored in this repo for convenience. 
 
 If you want to work on `orca_core` itself, use its own package workflow:
 
