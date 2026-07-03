@@ -1,0 +1,12 @@
+numpy>=2.4.0
+opencv-contrib-python>=4.13.0
+onnxruntime-gpu[cuda,cudnn]>=1.26.0
+rtmlib>=0.0.15
+tqdm>=4.68.0
+flatbuffers
+packaging
+protobuf
+colorama
+mediapipe>=0.10.35
+PyYAML>=6.0.2
+pytest>=8.0.0
