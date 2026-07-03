@@ -2,11 +2,8 @@
 .pytest_cache/
 __pycache__/
 *.pyc
-models/
 *.engine
 *.onnx
 logs/
 profiles/visual/
-6ÔÂ24ÈÕ.mp4
-
 *.mp4
