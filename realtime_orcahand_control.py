@@ -13,7 +13,6 @@ from tools.mediapipe_hand import (
     DEFAULT_CAPTURE_HEIGHT,
     DEFAULT_CAPTURE_WIDTH,
     DEFAULT_INFERENCE_MAX_WIDTH,
-    HAND_CONNECTIONS,
     MODEL_PATH,
     configure_capture,
     create_landmarker,

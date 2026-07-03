@@ -1,12 +1,13 @@
-numpy>=2.4.0
+# Core runtime for realtime_orcahand_control, realtime_orcahand, and tests
+numpy>=2.4.0,<3.0.0
 opencv-contrib-python>=4.13.0
-onnxruntime-gpu[cuda,cudnn]>=1.26.0
-rtmlib>=0.0.15
-tqdm>=4.68.0
-flatbuffers
-packaging
-protobuf
-colorama
 mediapipe>=0.10.35
-PyYAML>=6.0.2
+PyYAML>=6.0.2,<7.0.0
+Pillow>=10.0.0
+
+# Orca hand live-control runtime
+dynamixel-sdk>=3.7.31,<4.0.0
+pyserial>=3.5,<4.0
+
+# Test runner
 pytest>=8.0.0

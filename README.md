@@ -1,14 +1,67 @@
 # Real Time Detect With Orca
 
 Realtime MediaPipe hand tracking for OrcaHand, with a preview-first GUI and a
-dry-run default. The current primary entrypoint is the single-file GUI:
+dry-run default.
+
+## Setup
+
+The main app runs from the repository root environment. It imports
+`vendor/orca_core` directly from source, so you only need one virtual
+environment to run `realtime_orcahand.py`.
+
+From a fresh clone:
 
 ```powershell
-.\.venv\Scripts\python.exe realtime_orcahand_single_file.py --preview-only
+cd "\Real Time Detect With Orca"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-Use `--live` only when the OrcaHand hardware is connected and the calibration
-files under `config\` are valid.
+## Run
+
+Primary GUI:
+
+```powershell
+.\.venv\Scripts\python.exe realtime_orcahand.py --preview-only
+```
+
+For live hardware output:
+
+```powershell
+.\.venv\Scripts\python.exe realtime_orcahand.py --live
+```
+
+Useful checks:
+
+```powershell
+.\.venv\Scripts\python.exe realtime_orcahand.py --check
+.\.venv\Scripts\python.exe -m pytest -q
+```
+
+## Editor Setup
+
+The workspace settings are tuned for VS Code to prefer the root `.venv` and to
+resolve imports from both the repo root and `vendor\orca_core`.
+
+If VS Code asks you to pick an interpreter, select:
+
+```text
+${workspaceFolder}\.venv\Scripts\python.exe
+```
+
+## Vendor Core
+
+`vendor/orca_core` is vendored in this repo for convenience. You do **not**
+need to activate its own virtual environment to run the main GUI.
+
+If you want to work on `orca_core` itself, use its own package workflow:
+
+```powershell
+cd vendor\orca_core
+uv sync --group dev
+uv run pytest
+```
 
 ## Current Runtime
 
@@ -24,26 +77,6 @@ files under `config\` are valid.
 These defaults keep the CPU path near a 30 FPS budget while preserving a clear
 preview. The app still shows the camera preview at the display size; only the
 MediaPipe input is downscaled for inference.
-
-## Run
-
-```powershell
-cd "D:\programming\Real Time Detect With Orca"
-.\.venv\Scripts\python.exe realtime_orcahand_single_file.py --preview-only
-```
-
-For live hardware output:
-
-```powershell
-.\.venv\Scripts\python.exe realtime_orcahand_single_file.py --live
-```
-
-Useful checks:
-
-```powershell
-.\.venv\Scripts\python.exe realtime_orcahand_single_file.py --check
-.\.venv\Scripts\python.exe -m pytest -q
-```
 
 ## Notes
 

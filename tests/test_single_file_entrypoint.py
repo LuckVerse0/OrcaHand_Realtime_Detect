@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 
-SINGLE_FILE = Path("realtime_orcahand_single_file.py")
+SINGLE_FILE = Path("realtime_orcahand.py")
 
 
 def load_single_file_module():
@@ -427,6 +427,7 @@ def test_single_file_gui_keeps_start_mapping_clickable_for_calibration_guidance(
         output_button = FakeButton()
         stop_output_button = FakeButton()
         calibrate_button = FakeButton()
+        stop_calibrate_button = FakeButton()
 
         def _mapping_calibration_ready(self):
             return False
@@ -621,6 +622,7 @@ def test_single_file_gui_skips_button_state_work_when_snapshot_is_unchanged():
         output_button = FakeButton()
         stop_output_button = FakeButton()
         calibrate_button = FakeButton()
+        stop_calibrate_button = FakeButton()
 
     gui = FakeGui()
 
