@@ -1,10 +1,3 @@
-"""Single-file realtime OrcaHand control.
-
-The runtime keeps the camera preview high resolution, runs MediaPipe on a
-bounded inference frame, maps landmarks into safe OrcaHand joint targets, and
-only sends commands when the state machine is explicitly live.
-"""
-
 from __future__ import annotations
 
 import argparse
