@@ -132,7 +132,8 @@ DEFAULT_FORCE_CALIBRATE = False
 DEFAULT_MOVE_TO_NEUTRAL_ON_CONNECT = True
 DEFAULT_SEND_STEPS = 1
 DEFAULT_SEND_STEP_SIZE = 1e-2
-DEFAULT_DRAW_LINE_TYPE = cv2.LINE_8
+#DEFAULT_DRAW_LINE_TYPE = cv2.LINE_8
+DEFAULT_DRAW_LINE_TYPE = cv2.LINE_AA
 ANSI_COLORS = {
     "red": "\033[91m",
     "green": "\033[92m",
@@ -459,7 +460,7 @@ def _normalize_joint_to_motor_map(
     for joint, raw_motor_id in (raw_map or {}).items():
         motor_id = int(raw_motor_id)
         normalized[str(joint)] = abs(motor_id)
-        inversions[str(joint)] = motor_id < 0
+        inversions[str(joint)] = motor_id < 0 
     return normalized, inversions
 
 
@@ -474,7 +475,7 @@ def _read_int_pair_map(raw_values: dict[Any, Any]) -> dict[int, tuple[float, flo
     pairs: dict[int, tuple[float, float]] = {}
     for key, values in (raw_values or {}).items():
         if not isinstance(values, (list, tuple)) or len(values) < 2:
-            continue
+            continue   
         if values[0] is None or values[1] is None:
             continue
         pairs[int(key)] = (float(values[0]), float(values[1]))
@@ -1134,7 +1135,7 @@ def _palm_frame(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray,
     palm_forward = points[9] - points[0]
     palm_side = points[17] - points[5]
     forward = _unit_vector(palm_forward)
-    side = palm_side - np.dot(palm_side, forward) * forward
+    side = palm_side - np.dot(palm_side, forward) * forward #Gram-Schmidt Orthogonalization
     side = _unit_vector(side)
     normal = _unit_vector(np.cross(side, forward))
     valid = not (
@@ -1887,12 +1888,13 @@ def detect_frame(
 
 
 def landmark_score(landmark) -> float:
-    values = []
-    for attribute in ("visibility", "presence"):
-        value = getattr(landmark, attribute, None)
-        if value is not None:
-            values.append(float(value))
-    return max(values) if values else 1.0
+    visibility = getattr(landmark, "visibility", None)
+    presence = getattr(landmark, "presence", None)
+    if visibility is None:
+        return float(presence) if presence is not None else 1.0
+    if presence is None:
+        return float(visibility)
+    return max(float(visibility), float(presence))
 
 
 def draw_hand(
@@ -2137,23 +2139,22 @@ def _parse_handedness_label(label: str) -> tuple[str | None, float]:
     return handedness, score
 
 
-def _hand_quality_reasons(
+def _hand_fails_quality_gate(
     keypoints: np.ndarray,
     scores: np.ndarray,
     locked_wrist: tuple[float, float] | None,
-) -> list[str]:
-    reasons: list[str] = []
+) -> bool:
     points = np.asarray(keypoints, dtype=np.float32)
     hand_scores = np.asarray(scores, dtype=np.float32)
     if points.shape[0] != 21 or hand_scores.shape[0] != 21:
-        return ["incomplete hand landmarks"]
+        return True
 
     mean_score = float(np.mean(hand_scores))
     visible_fraction = float(np.mean(hand_scores >= MIN_LANDMARK_SCORE))
     if mean_score < MIN_HAND_SCORE:
-        reasons.append("low hand landmark score")
+        return True
     if visible_fraction < MIN_VISIBLE_LANDMARK_FRACTION:
-        reasons.append("too few confident landmarks")
+        return True
 
     min_palm_size_sq = MIN_PALM_SIZE_PX * MIN_PALM_SIZE_PX
     palm_size_sq = max(
@@ -2162,13 +2163,13 @@ def _hand_quality_reasons(
         _distance_sq_2d(points[5], points[0]),
     )
     if palm_size_sq < min_palm_size_sq:
-        reasons.append("hand too small or degenerate")
+        return True
 
     if locked_wrist is not None:
         jump_limit_sq = MAX_LOCKED_WRIST_JUMP_PX * MAX_LOCKED_WRIST_JUMP_PX
         if _distance_sq_xy(points[0], locked_wrist[0], locked_wrist[1]) > jump_limit_sq:
-            reasons.append("wrist jump too large")
-    return reasons
+            return True
+    return False
 
 
 def _distance_sq_2d(a: np.ndarray, b: np.ndarray) -> float:
@@ -2197,7 +2198,7 @@ def select_one_hand(
     for index, (hand_keypoints, hand_scores, label) in enumerate(
         zip(keypoints, scores, labels)
     ):
-        if _hand_quality_reasons(hand_keypoints, hand_scores, locked_wrist):
+        if _hand_fails_quality_gate(hand_keypoints, hand_scores, locked_wrist):
             continue
         handedness, handedness_score = _parse_handedness_label(label)
         score = float(np.mean(hand_scores))
@@ -3924,7 +3925,7 @@ def _display_target_size(
 
 def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Single-file realtime MediaPipe hand tracking to OrcaHand joint commands."
+        description="realtime MediaPipe hand tracking to OrcaHand joint commands."
     )
     parser.add_argument(
         "--live",
@@ -4071,18 +4072,7 @@ def run_cv2_window(args: argparse.Namespace) -> int:
                 _draw_status(frame, state, hardware_enabled, safety_result, kinematics)
 
                 cv2.imshow(WINDOW_NAME, frame)
-                key = cv2.waitKey(1) & 0xFF
-                if _handle_key(
-                    key,
-                    state,
-                    kinematics,
-                    latest_landmarks,
-                    controller,
-                    safety,
-                    hardware_enabled,
-                    joint_smoother=joint_smoother,
-                ):
-                    break
+                cv2.waitKey(1)
                 if cv2.getWindowProperty(WINDOW_NAME, cv2.WND_PROP_VISIBLE) < 1:
                     break
                 frame_count += 1
@@ -4093,133 +4083,6 @@ def run_cv2_window(args: argparse.Namespace) -> int:
         controller.disconnect()
 
     return 0
-
-
-def _handle_key(
-    key: int,
-    state: RuntimeStateMachine,
-    kinematics: HandKinematics,
-    latest_landmarks: np.ndarray | None,
-    controller: OrcaController,
-    safety: SafetyController,
-    live_allowed: bool,
-    joint_smoother=None,
-) -> bool:
-    if key == 255:
-        return False
-    if key == ord("q"):
-        _print_status("Quit requested. Stopping program.", "yellow")
-        return True
-    if state.state == RuntimeState.FAULT and key in (
-        ord("m"),
-        ord("l"),
-        ord("n"),
-        ord("o"),
-        ord("c"),
-        ord("a"),
-        ord("s"),
-    ):
-        _print_status(f"FAULT active: {state.reason}. Restart the program to continue.", "red")
-        return False
-    if key == ord("o"):
-        if latest_landmarks is None:
-            _print_status("No hand detected. Show a fully open hand, then press 'o'.", "yellow")
-            return False
-        kinematics.capture_open_pose(latest_landmarks)
-        _reset_after_calibration_capture(state, safety, joint_smoother)
-        _print_status(
-            "Open hand calibration captured. Make a tight fist and press 'c'.",
-            "cyan",
-        )
-    elif key == ord("c"):
-        if latest_landmarks is None:
-            _print_status("No hand detected. Make a tight fist, then press 'c'.", "yellow")
-            return False
-        kinematics.capture_closed_pose(latest_landmarks)
-        _reset_after_calibration_capture(state, safety, joint_smoother)
-        if _range_calibration_ready(kinematics):
-            _print_status(
-                "Fist calibration captured. Flex calibration complete. Spread fingers and press 'a'.",
-                "green",
-            )
-        else:
-            _print_status(
-                "Fist calibration captured. Fully open your hand and press 'o'.",
-                "cyan",
-            )
-    elif key == ord("a"):
-        if latest_landmarks is None:
-            _print_status("No hand detected. Spread fingers sideways, then press 'a'.", "yellow")
-            return False
-        kinematics.capture_abd_spread_pose(latest_landmarks)
-        _reset_after_calibration_capture(state, safety, joint_smoother)
-        _print_status(
-            "Spread calibration captured. Bring fingers together and press 's'.",
-            "cyan",
-        )
-    elif key == ord("s"):
-        if latest_landmarks is None:
-            _print_status("No hand detected. Bring fingers together, then press 's'.", "yellow")
-            return False
-        kinematics.capture_abd_together_pose(latest_landmarks)
-        _reset_after_calibration_capture(state, safety, joint_smoother)
-        if _mapping_calibration_ready(kinematics):
-            _print_status(
-                "Together calibration captured. All calibration complete. Press 'm' to arm mapping.",
-                "green",
-            )
-        else:
-            _print_status(
-                "Together calibration captured. Finish flex calibration with 'o' and 'c'.",
-                "cyan",
-            )
-    elif key == ord("m"):
-        if state.state == RuntimeState.PREVIEW:
-            if not _mapping_calibration_ready(kinematics):
-                _print_status(
-                    "Calibrate first: open 'o', fist 'c', side-spread 'a', side-together 's'.",
-                    "yellow",
-                )
-                return False
-            state.start_mapping()
-            _print_status(
-                "Mapping armed. OrcaHand stays at mechanical neutral until 'l'.",
-                "cyan",
-            )
-        else:
-            state.stop_mapping()
-            _print_status("Mapping stopped. Hardware output is off.", "yellow")
-    elif key == ord("l"):
-        if state.state != RuntimeState.LIVE and not _mapping_calibration_ready(kinematics):
-            _print_status(
-                "Calibrate first: open 'o', fist 'c', side-spread 'a', side-together 's'.",
-                "yellow",
-            )
-        elif live_allowed and state.state == RuntimeState.ARMED:
-            safety.reset_to_safe_neutral()
-            if joint_smoother is not None:
-                joint_smoother.reset()
-            state.enable_live()
-            _print_status(
-                "Hardware output enabled. Ramping from mechanical neutral.",
-                "green",
-            )
-        elif state.state == RuntimeState.LIVE:
-            state.disable_live()
-            _print_status("Hardware output disabled. Preview remains active.", "yellow")
-        elif not live_allowed:
-            _print_status("Hardware output is disabled in preview-only mode.", "red")
-        else:
-            _print_status("Press 'm' first to arm mapping, then press 'l'.", "yellow")
-    elif key == ord("n") and latest_landmarks is not None:
-        _capture_visual_neutral(kinematics, latest_landmarks, joint_smoother)
-        safety.reset_to_safe_neutral()
-        _print_status("Captured current hand pose as abduction neutral.", "cyan")
-    elif key in (27, 32):
-        state.fault("emergency stop")
-        controller.emergency_stop()
-        _print_status("Emergency stop: torque disabled.", "red")
-    return False
 
 
 def _react_to_safety_result(
@@ -4254,28 +4117,6 @@ def _safety_stop(
     _print_status(f"SAFETY STOP: {reason}", "red")
 
 
-def _capture_visual_neutral(
-    kinematics: HandKinematics,
-    latest_landmarks: np.ndarray,
-    joint_smoother=None,
-) -> None:
-    kinematics.capture_neutral(latest_landmarks)
-    if joint_smoother is not None:
-        joint_smoother.reset()
-
-
-def _reset_after_calibration_capture(
-    state: RuntimeStateMachine,
-    safety: SafetyController,
-    joint_smoother=None,
-) -> None:
-    if state.state in (RuntimeState.ARMED, RuntimeState.LIVE):
-        state.stop_mapping()
-    safety.reset_to_safe_neutral()
-    if joint_smoother is not None:
-        joint_smoother.reset()
-
-
 def _range_calibration_ready(kinematics: HandKinematics) -> bool:
     return bool(getattr(kinematics, "has_range_calibration", True))
 
@@ -4284,20 +4125,14 @@ def _abd_range_calibration_ready(kinematics: HandKinematics) -> bool:
     return bool(getattr(kinematics, "has_abd_range_calibration", True))
 
 
-def _mapping_calibration_ready(kinematics: HandKinematics) -> bool:
-    return _range_calibration_ready(kinematics) and _abd_range_calibration_ready(
-        kinematics
-    )
-
-
 def _range_calibration_status(kinematics: HandKinematics | None) -> str:
     if kinematics is None:
         return "unknown"
     status = getattr(kinematics, "range_calibration_status", None)
     flex_status = str(status()) if callable(status) else (
-        "ready" if _range_calibration_ready(kinematics) else "press o/c"
+        "ready" if _range_calibration_ready(kinematics) else "needed"
     )
-    abd_status = "ready" if _abd_range_calibration_ready(kinematics) else "press a/s"
+    abd_status = "ready" if _abd_range_calibration_ready(kinematics) else "needed"
     return f"flex:{flex_status} abd:{abd_status}"
 
 
@@ -4315,13 +4150,16 @@ def _draw_status(
     for index, line in enumerate(
         _status_lines(state, live_allowed, safety_result, kinematics)
     ):
+        line_color = color
+        if line.startswith("OUTPUT "):
+            line_color = (0, 255, 0) if state.can_send_to_hardware else (0, 180, 255)
         cv2.putText(
             frame,
             line,
             (16, 32 + index * 28),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.58 if index else 0.7,
-            color if index != 2 else ((0, 255, 0) if state.can_send_to_hardware else (0, 180, 255)),
+            line_color,
             2 if index == 0 else 1,
             cv2.LINE_AA,
         )
@@ -4362,7 +4200,6 @@ def _status_lines(
     output_state = "OUTPUT ON" if state.can_send_to_hardware else "OUTPUT OFF"
     lines = [
         f"state:{state.state.value} live_allowed:{live_allowed} calib:{_range_calibration_status(kinematics)}",
-        "o:open | c:fist | n:abd neutral | a:spread | s:together | m:start | l:output | q:quit",
         output_state,
     ]
     if safety_result is not None and safety_result.reasons:
