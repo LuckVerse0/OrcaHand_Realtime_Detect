@@ -38,6 +38,233 @@ class FakeVar:
         self.value = value
 
 
+class FakeLabel:
+    def __init__(self):
+        self.foreground = None
+
+    def configure(self, **kwargs):
+        if "fg" in kwargs:
+            self.foreground = kwargs["fg"]
+
+    def winfo_exists(self):
+        return True
+
+
+class FakeRoot:
+    def __init__(self):
+        self.scheduled = []
+        self.delays = []
+
+    def after(self, delay_ms, callback):
+        self.delays.append(delay_ms)
+        self.scheduled.append(callback)
+
+    def run_next(self):
+        self.scheduled.pop(0)()
+
+
+def make_state_display_gui(module):
+    class FakeGui:
+        def _safety_stop(self, reason):
+            self.safety_stop_reasons.append(reason)
+            self.state.fault(f"safety stop: {reason}")
+
+    gui = FakeGui()
+    gui.root = FakeRoot()
+    gui.state = module.RuntimeStateMachine()
+    gui.state.start_mapping()
+    gui.state.enable_live()
+    gui.state.tracking_lost("no hand detected")
+    gui.state_var = FakeVar()
+    gui.state_card_var = FakeVar()
+    gui.preview_state_var = FakeVar()
+    gui.state_card_label = FakeLabel()
+    gui.preview_state_label = FakeLabel()
+    gui._tracking_lost_alert_token = 0
+    gui._tracking_lost_alert_active = False
+    gui._tracking_lost_blink_visible = True
+    gui._tracking_lost_blink_steps_remaining = 0
+    gui.safety_stop_reasons = []
+    return gui
+
+
+def test_tracking_lost_alert_is_immediate_and_runs_for_two_seconds():
+    module = load_realtime_module()
+    gui = make_state_display_gui(module)
+
+    module.OrcaRealtimeGui._start_tracking_lost_alert(gui)
+
+    assert gui.preview_state_var.value == "STATE TRACKING LOST"
+    assert gui.state_card_var.value == "TRACKING LOST"
+    assert gui.root.delays == [250]
+    assert gui.preview_state_label.foreground == module.CONSOLE_DANGER
+
+    gui.state.recover_tracking()
+    gui.root.run_next()
+    assert gui.preview_state_label.foreground == "#101822"
+    gui.root.run_next()
+    assert gui.preview_state_label.foreground == module.CONSOLE_DANGER
+
+    for _ in range(5):
+        gui.root.run_next()
+        assert gui.preview_state_var.value == "STATE TRACKING LOST"
+
+    gui.root.run_next()
+
+    assert gui.preview_state_var.value == "STATE LIVE"
+    assert gui.state_card_var.value == "LIVE"
+    assert gui._tracking_lost_alert_active is False
+
+
+def test_fault_cancels_tracking_lost_alert_and_remains_visible():
+    module = load_realtime_module()
+    gui = make_state_display_gui(module)
+    module.OrcaRealtimeGui._start_tracking_lost_alert(gui)
+    gui.state.fault("safety stop: no hand detected")
+
+    module.OrcaRealtimeGui._cancel_tracking_lost_alert(gui)
+
+    assert gui.preview_state_var.value == "STATE FAULT"
+    assert gui.state_card_var.value == "FAULT"
+    assert gui.preview_state_label.foreground == module.CONSOLE_DANGER
+    assert gui.state_card_label.foreground == module.CONSOLE_DANGER
+
+    gui.root.run_next()
+    assert gui.preview_state_var.value == "STATE FAULT"
+
+
+def test_tracking_lost_alert_deadline_faults_when_tracking_does_not_recover():
+    module = load_realtime_module()
+    gui = make_state_display_gui(module)
+
+    module.OrcaRealtimeGui._start_tracking_lost_alert(gui)
+    for _ in range(8):
+        gui.root.run_next()
+
+    assert gui.safety_stop_reasons == ["no hand detected"]
+    assert gui.state.state == module.RuntimeState.FAULT
+
+
+def test_stop_recognition_safely_stops_live_output_during_tracking_loss():
+    module = load_realtime_module()
+
+    class FakeController:
+        def __init__(self):
+            self.connected = True
+            self.stop_count = 0
+
+        def emergency_stop(self):
+            self.stop_count += 1
+            self.connected = False
+
+    class FakeResettable:
+        def reset(self):
+            pass
+
+    class FakeGui:
+        def __init__(self):
+            self.running = True
+            self.controller = FakeController()
+            self.state = module.RuntimeStateMachine()
+            self.state.start_mapping()
+            self.state.enable_live()
+            self.state.tracking_lost("no hand detected")
+            self.latest_landmarks = object()
+            self.landmark_smoother = FakeResettable()
+            self.joint_smoother = FakeResettable()
+            self.release_count = 0
+            self.status_messages = []
+            self.alert_cancelled_in_state = None
+
+        def _stop_live_hardware_output(self):
+            module.OrcaRealtimeGui._stop_live_hardware_output(self)
+
+        def _release_recognition_resources(self):
+            self.release_count += 1
+
+        def _cancel_tracking_lost_alert(self):
+            self.alert_cancelled_in_state = self.state.state
+
+        def _set_status(self, message):
+            self.status_messages.append(message)
+
+    gui = FakeGui()
+
+    module.OrcaRealtimeGui.stop_recognition(gui)
+
+    assert gui.controller.stop_count == 1
+    assert gui.controller.connected is False
+    assert gui.state.state == module.RuntimeState.PREVIEW
+    assert gui.alert_cancelled_in_state == module.RuntimeState.PREVIEW
+
+
+def test_camera_read_failure_safety_stops_live_output():
+    module = load_realtime_module()
+
+    class FakeCapture:
+        def read(self):
+            return False, None
+
+    class FakeGui:
+        def __init__(self):
+            self.running = True
+            self.cap = FakeCapture()
+            self.capture_reader = None
+            self.landmarker = object()
+            self.state = module.RuntimeStateMachine()
+            self.state.start_mapping()
+            self.state.enable_live()
+            self.safety_stop_reasons = []
+            self.stop_recognition_count = 0
+
+        def _safety_stop(self, reason):
+            self.safety_stop_reasons.append(reason)
+            self.state.fault(f"safety stop: {reason}")
+
+        def stop_recognition(self):
+            self.stop_recognition_count += 1
+
+    gui = FakeGui()
+
+    module.OrcaRealtimeGui._tick(gui)
+
+    assert gui.safety_stop_reasons == ["camera read failed"]
+    assert gui.stop_recognition_count == 1
+
+
+def test_runtime_error_safety_stops_output_during_tracking_loss():
+    module = load_realtime_module()
+
+    class FakeGui:
+        def __init__(self):
+            self.state = module.RuntimeStateMachine()
+            self.state.start_mapping()
+            self.state.enable_live()
+            self.state.tracking_lost("no hand detected")
+            self.running = True
+            self.safety_stop_reasons = []
+            self.release_count = 0
+            self.status_messages = []
+
+        def _safety_stop(self, reason):
+            self.safety_stop_reasons.append(reason)
+            self.state.fault(f"safety stop: {reason}")
+
+        def _release_recognition_resources(self):
+            self.release_count += 1
+
+        def _set_status(self, message):
+            self.status_messages.append(message)
+
+    gui = FakeGui()
+
+    module.OrcaRealtimeGui._handle_runtime_error(gui, RuntimeError("boom"))
+
+    assert gui.safety_stop_reasons == ["runtime error: boom"]
+    assert gui.state.state == module.RuntimeState.FAULT
+    assert gui.running is False
+
+
 def test_neutral_button_sends_safe_neutral_and_exits_live_output():
     module = load_realtime_module()
 

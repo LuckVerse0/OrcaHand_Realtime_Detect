@@ -80,6 +80,8 @@ DEFAULT_LOG_FLUSH_EVERY = 30
 DEFAULT_LOG_FLUSH_INTERVAL_S = 1.0
 DEFAULT_UI_TELEMETRY_FPS = 10
 DEFAULT_TRACKING_LOST_STOP_S = 2.0
+DEFAULT_TRACKING_LOST_ALERT_MS = 2000
+DEFAULT_TRACKING_LOST_BLINK_MS = 250
 DEFAULT_VISUAL_CALIBRATION_DIR = Path("profiles") / "visual"
 DEFAULT_PROCESSED_VIDEO_DIR = DEFAULT_LOG_DIR / "processed_videos"
 DEFAULT_ORCA_CORE_ROOT = PROJECT_ROOT / "vendor" / "orca_core"
@@ -2304,6 +2306,11 @@ class OrcaRealtimeGui:
         self._next_perf_telemetry_update = 0.0
         self._panel_scrollregion_pending = False
         self._hand_missing_since: float | None = None
+        self._tracking_lost_deadline_s: float | None = None
+        self._tracking_lost_alert_token = 0
+        self._tracking_lost_alert_active = False
+        self._tracking_lost_blink_visible = True
+        self._tracking_lost_blink_steps_remaining = 0
         self._fps_counter = RollingFpsCounter()
 
         self.status_var = tk.StringVar(value="Ready.")
@@ -2409,13 +2416,16 @@ class OrcaRealtimeGui:
             fg=CONSOLE_MUTED,
             font=("Segoe UI", 8, "bold"),
         ).pack(anchor="w")
-        tk.Label(
+        value_label = tk.Label(
             card,
             textvariable=variable,
             bg=CONSOLE_CARD,
             fg=accent,
             font=("Segoe UI", 12, "bold"),
-        ).pack(anchor="w", pady=(4, 0))
+        )
+        value_label.pack(anchor="w", pady=(4, 0))
+        if variable is self.state_card_var:
+            self.state_card_label = value_label
         return card
 
     def _create_status_pill(
@@ -2508,14 +2518,17 @@ class OrcaRealtimeGui:
                 (self.preview_safety_var, CONSOLE_WARNING, "e"),
             )
         ):
-            tk.Label(
+            label = tk.Label(
                 preview_top,
                 textvariable=variable,
                 bg="#101822",
                 fg=color,
                 font=("Segoe UI", 10, "bold"),
                 anchor=anchor,
-            ).grid(row=0, column=column, sticky="ew")
+            )
+            label.grid(row=0, column=column, sticky="ew")
+            if column == 0:
+                self.preview_state_label = label
 
         preview_bottom = tk.Frame(
             video_frame,
@@ -2926,6 +2939,7 @@ class OrcaRealtimeGui:
         self.locked_wrist = None
         self.latest_landmarks = None
         self._hand_missing_since = None
+        self._tracking_lost_deadline_s = None
         self._set_status("Recognition started.")
         self._update_button_states()
         self._tick()
@@ -2949,18 +2963,24 @@ class OrcaRealtimeGui:
     def stop_recognition(self) -> None:
         self.running = False
         self._stop_live_hardware_output()
+        self._hand_missing_since = None
+        self._tracking_lost_deadline_s = None
         self._release_recognition_resources()
         self.latest_landmarks = None
         self.landmark_smoother.reset()
         self.joint_smoother.reset()
-        if not self.controller.connected and self.state.state in (
+        if self.state.state == RuntimeState.TRACKING_LOST:
+            self.state.stop_mapping()
+        elif not self.controller.connected and self.state.state in (
             RuntimeState.ARMED,
             RuntimeState.LIVE,
-            RuntimeState.TRACKING_LOST,
         ):
             self.state.stop_mapping()
         elif self.state.state == RuntimeState.LIVE:
             self.state.disable_live()
+        cancel_alert = getattr(self, "_cancel_tracking_lost_alert", None)
+        if callable(cancel_alert):
+            cancel_alert()
         self._set_status("Recognition stopped.")
 
     def connect_hardware(self) -> None:
@@ -3061,12 +3081,18 @@ class OrcaRealtimeGui:
         self._update_button_states()
 
     def _stop_live_hardware_output(self) -> None:
-        if self.state.state == RuntimeState.LIVE:
+        if self.state.state == RuntimeState.LIVE or (
+            self.state.state == RuntimeState.TRACKING_LOST
+            and self.state._return_state == RuntimeState.LIVE
+        ):
             self.controller.emergency_stop()
 
     def emergency_stop(self) -> None:
         self.stop_processed_video_playback(update_status=False)
         self.state.fault("emergency stop")
+        self._hand_missing_since = None
+        self._tracking_lost_deadline_s = None
+        self._cancel_tracking_lost_alert()
         self.controller.emergency_stop()
         self._set_status("Emergency stop: torque disabled.")
 
@@ -3316,7 +3342,17 @@ class OrcaRealtimeGui:
             tick_start = time.monotonic()
             ok, frame, read_ms = OrcaRealtimeGui._read_realtime_frame(self)
             if not ok:
-                self.state.fault("camera read failed")
+                live_output_active = self.state.state == RuntimeState.LIVE or (
+                    self.state.state == RuntimeState.TRACKING_LOST
+                    and self.state._return_state == RuntimeState.LIVE
+                )
+                if live_output_active:
+                    self._safety_stop("camera read failed")
+                else:
+                    self.state.fault("camera read failed")
+                    cancel_alert = getattr(self, "_cancel_tracking_lost_alert", None)
+                    if callable(cancel_alert):
+                        cancel_alert()
                 self.stop_recognition()
                 return
             if DEFAULT_MIRROR:
@@ -3341,7 +3377,6 @@ class OrcaRealtimeGui:
             if selected_hands:
                 hand = selected_hands[0]
                 self.locked_wrist = hand["wrist"]
-                self._hand_missing_since = None
                 self.latest_landmarks = np.asarray(hand["keypoints"], dtype=float)
                 self.hand_var.set(f"Hand: {hand['label']}")
                 self.tracking_card_var.set(str(hand["label"]).upper())
@@ -3396,25 +3431,29 @@ class OrcaRealtimeGui:
 
     def _handle_runtime_error(self, exc: Exception) -> None:
         message = str(exc) or exc.__class__.__name__
-        if self.state.state == RuntimeState.LIVE:
+        live_output_active = self.state.state == RuntimeState.LIVE or (
+            self.state.state == RuntimeState.TRACKING_LOST
+            and self.state._return_state == RuntimeState.LIVE
+        )
+        if live_output_active:
             try:
                 self._safety_stop(f"runtime error: {message}")
             except Exception:
                 self.state.fault(f"runtime error: {message}")
+                cancel_alert = getattr(self, "_cancel_tracking_lost_alert", None)
+                if callable(cancel_alert):
+                    cancel_alert()
         else:
             self.state.fault(f"runtime error: {message}")
+            cancel_alert = getattr(self, "_cancel_tracking_lost_alert", None)
+            if callable(cancel_alert):
+                cancel_alert()
         self.running = False
         self._release_recognition_resources()
         self._set_status(f"Runtime stopped: {message}")
 
     def _handle_no_hand(self, *, now_s: float | None = None) -> None:
         now = time.monotonic() if now_s is None else float(now_s)
-        missing_since = getattr(self, "_hand_missing_since", None)
-        if missing_since is None:
-            self._hand_missing_since = now
-            missing_since = now
-        missing_s = max(0.0, now - float(missing_since))
-
         self.latest_landmarks = None
         self.latest_safety_result = None
         self.hand_var.set("Hand: none")
@@ -3427,21 +3466,53 @@ class OrcaRealtimeGui:
         self.joint_smoother.reset()
 
         if self.state.state == RuntimeState.LIVE:
+            self._hand_missing_since = now
+            self._tracking_lost_deadline_s = now + DEFAULT_TRACKING_LOST_STOP_S
             self.state.tracking_lost("no hand detected")
+            start_alert = getattr(self, "_start_tracking_lost_alert", None)
+            if callable(start_alert):
+                start_alert()
         elif self.state.state == RuntimeState.TRACKING_LOST:
             self.state.reason = "no hand detected"
+            missing_since = getattr(self, "_hand_missing_since", None)
+            if missing_since is None:
+                self._hand_missing_since = now
+            if getattr(self, "_tracking_lost_deadline_s", None) is None:
+                self._tracking_lost_deadline_s = (
+                    float(self._hand_missing_since) + DEFAULT_TRACKING_LOST_STOP_S
+                )
+        else:
+            self._hand_missing_since = None
+            self._tracking_lost_deadline_s = None
 
+        deadline = getattr(self, "_tracking_lost_deadline_s", None)
         if (
             self.state.state == RuntimeState.TRACKING_LOST
-            and missing_s >= DEFAULT_TRACKING_LOST_STOP_S
+            and deadline is not None
+            and now >= float(deadline)
         ):
             self._safety_stop("no hand detected")
 
-    def _process_landmarks(self, landmarks: np.ndarray) -> None:
+    def _process_landmarks(
+        self,
+        landmarks: np.ndarray,
+        *,
+        now_s: float | None = None,
+    ) -> None:
         """Map landmarks to safe joint commands; UI text is throttled separately."""
 
-        if hasattr(self, "_hand_missing_since"):
+        now = time.monotonic() if now_s is None else float(now_s)
+        deadline = getattr(self, "_tracking_lost_deadline_s", None)
+        if (
+            self.state.state == RuntimeState.TRACKING_LOST
+            and deadline is not None
+            and now >= float(deadline)
+        ):
+            self._safety_stop("no hand detected")
+            return
+        if self.state.state != RuntimeState.TRACKING_LOST:
             self._hand_missing_since = None
+            self._tracking_lost_deadline_s = None
         smoothed_landmarks = self.landmark_smoother.update(landmarks)
         raw_joints = self.kinematics.estimate(smoothed_landmarks)
         smoothed_joints = self.joint_smoother.update(raw_joints)
@@ -3461,6 +3532,11 @@ class OrcaRealtimeGui:
             return
         if self.state.state == RuntimeState.TRACKING_LOST:
             self.state.recover_tracking()
+            self._hand_missing_since = None
+            self._tracking_lost_deadline_s = None
+            refresh_state = getattr(self, "_refresh_runtime_state_display", None)
+            if callable(refresh_state):
+                refresh_state()
         elif self.state.state in (RuntimeState.PREVIEW, RuntimeState.ARMED):
             self.state.reason = ""
         if self.state.can_send_to_hardware:
@@ -3713,6 +3789,9 @@ class OrcaRealtimeGui:
 
     def _safety_stop(self, reason: str) -> None:
         self.state.fault(f"safety stop: {reason}")
+        self._hand_missing_since = None
+        self._tracking_lost_deadline_s = None
+        self._cancel_tracking_lost_alert()
         self.controller.emergency_stop()
         self.safety_var.set(f"Safety: STOP - {reason}")
         if hasattr(self, "safety_card_var"):
@@ -3720,6 +3799,107 @@ class OrcaRealtimeGui:
         if hasattr(self, "preview_safety_var"):
             self.preview_safety_var.set("Safety: STOP")
         self._set_status(f"SAFETY STOP: {reason}")
+
+    def _start_tracking_lost_alert(self) -> None:
+        self._tracking_lost_alert_token = (
+            int(getattr(self, "_tracking_lost_alert_token", 0)) + 1
+        )
+        token = self._tracking_lost_alert_token
+        self._tracking_lost_alert_active = True
+        self._tracking_lost_blink_visible = True
+        self._tracking_lost_blink_steps_remaining = max(
+            1,
+            DEFAULT_TRACKING_LOST_ALERT_MS // DEFAULT_TRACKING_LOST_BLINK_MS,
+        )
+        OrcaRealtimeGui._refresh_runtime_state_display(self)
+        try:
+            self.root.after(
+                DEFAULT_TRACKING_LOST_BLINK_MS,
+                lambda: OrcaRealtimeGui._advance_tracking_lost_alert(self, token),
+            )
+        except (tk.TclError, RuntimeError):
+            self._tracking_lost_alert_active = False
+
+    def _advance_tracking_lost_alert(self, token: int) -> None:
+        if token != int(getattr(self, "_tracking_lost_alert_token", 0)):
+            return
+        if self.state.state == RuntimeState.FAULT:
+            OrcaRealtimeGui._cancel_tracking_lost_alert(self)
+            return
+
+        remaining = int(getattr(self, "_tracking_lost_blink_steps_remaining", 0)) - 1
+        self._tracking_lost_blink_steps_remaining = remaining
+        if remaining <= 0:
+            if self.state.state == RuntimeState.TRACKING_LOST:
+                self._safety_stop("no hand detected")
+                return
+            self._tracking_lost_alert_active = False
+            self._tracking_lost_blink_visible = True
+            OrcaRealtimeGui._refresh_runtime_state_display(self)
+            return
+
+        self._tracking_lost_blink_visible = not bool(
+            getattr(self, "_tracking_lost_blink_visible", True)
+        )
+        OrcaRealtimeGui._refresh_runtime_state_display(self)
+        try:
+            self.root.after(
+                DEFAULT_TRACKING_LOST_BLINK_MS,
+                lambda: OrcaRealtimeGui._advance_tracking_lost_alert(self, token),
+            )
+        except (tk.TclError, RuntimeError):
+            self._tracking_lost_alert_active = False
+
+    def _cancel_tracking_lost_alert(self, *, refresh: bool = True) -> None:
+        self._tracking_lost_alert_token = (
+            int(getattr(self, "_tracking_lost_alert_token", 0)) + 1
+        )
+        self._tracking_lost_alert_active = False
+        self._tracking_lost_blink_visible = True
+        self._tracking_lost_blink_steps_remaining = 0
+        if refresh:
+            OrcaRealtimeGui._refresh_runtime_state_display(self)
+
+    def _refresh_runtime_state_display(self) -> None:
+        actual_state = self.state.state
+        alert_active = bool(
+            getattr(self, "_tracking_lost_alert_active", False)
+        ) and actual_state != RuntimeState.FAULT
+        display_state = RuntimeState.TRACKING_LOST if alert_active else actual_state
+        display_text = display_state.value.replace("_", " ").upper()
+
+        if hasattr(self, "state_var"):
+            self.state_var.set(f"state: {display_state.value}")
+        if hasattr(self, "state_card_var"):
+            self.state_card_var.set(display_text)
+        if hasattr(self, "preview_state_var"):
+            self.preview_state_var.set(f"STATE {display_text}")
+
+        state_color = {
+            RuntimeState.ARMED: CONSOLE_WARNING,
+            RuntimeState.TRACKING_LOST: CONSOLE_DANGER,
+            RuntimeState.FAULT: CONSOLE_DANGER,
+        }.get(display_state, CONSOLE_SUCCESS)
+        card_label = getattr(self, "state_card_label", None)
+        if card_label is not None:
+            try:
+                if card_label.winfo_exists():
+                    card_label.configure(fg=state_color)
+            except (tk.TclError, RuntimeError):
+                pass
+
+        preview_color = state_color
+        if alert_active and not bool(
+            getattr(self, "_tracking_lost_blink_visible", True)
+        ):
+            preview_color = "#101822"
+        preview_label = getattr(self, "preview_state_label", None)
+        if preview_label is not None:
+            try:
+                if preview_label.winfo_exists():
+                    preview_label.configure(fg=preview_color)
+            except (tk.TclError, RuntimeError):
+                pass
 
     def _video_import_allowed(self) -> bool:
         return bool(
@@ -3748,11 +3928,7 @@ class OrcaRealtimeGui:
             return
         self._button_state_snapshot = snapshot
 
-        self.state_var.set(f"state: {state_text}")
-        if hasattr(self, "state_card_var"):
-            self.state_card_var.set(state_text.upper())
-        if hasattr(self, "preview_state_var"):
-            self.preview_state_var.set(f"STATE {state_text.upper()}")
+        OrcaRealtimeGui._refresh_runtime_state_display(self)
         self.hardware_var.set("hardware: connected" if connected else "hardware: disconnected")
         if hasattr(self, "hardware_card_var"):
             self.hardware_card_var.set("CONNECTED" if connected else "DISCONNECTED")
@@ -3807,6 +3983,7 @@ class OrcaRealtimeGui:
 
     def close(self) -> None:
         self.running = False
+        self._cancel_tracking_lost_alert(refresh=False)
         self.stop_processed_video_playback(update_status=False)
         self._release_recognition_resources()
         self.controller.disconnect()

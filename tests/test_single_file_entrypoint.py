@@ -2163,6 +2163,10 @@ def test_single_file_gui_transient_no_hand_enters_tracking_lost_without_fault():
             self.joint_smoother = FakeResettable()
             self.safety_stop_reason = None
             self._hand_missing_since = None
+            self.tracking_lost_alert_count = 0
+
+        def _start_tracking_lost_alert(self):
+            self.tracking_lost_alert_count += 1
 
         def _safety_stop(self, reason):
             self.safety_stop_reason = reason
@@ -2175,6 +2179,7 @@ def test_single_file_gui_transient_no_hand_enters_tracking_lost_without_fault():
     assert gui.state.state == module.RuntimeState.TRACKING_LOST
     assert gui.state.reason == "no hand detected"
     assert gui.safety_stop_reason is None
+    assert gui.tracking_lost_alert_count == 1
     assert gui.latest_landmarks is None
     assert gui.latest_safety_result is None
     assert gui.landmark_smoother.reset_count == 1
@@ -2254,6 +2259,91 @@ def test_single_file_tracking_lost_pauses_output_and_recovers_live_state():
 
     assert state.state == module.RuntimeState.LIVE
     assert state.can_send_to_hardware is True
+
+
+def test_single_file_tracking_loss_deadline_blocks_late_recovery_and_send():
+    module = load_single_file_module()
+
+    class FakeController:
+        def __init__(self):
+            self.sent = []
+
+        def send(self, joints):
+            self.sent.append(dict(joints))
+
+    class FakeGui:
+        def __init__(self):
+            self.state = module.RuntimeStateMachine()
+            self.state.start_mapping()
+            self.state.enable_live()
+            self.state.tracking_lost("no hand detected")
+            self._tracking_lost_deadline_s = 12.0
+            self.controller = FakeController()
+            self.safety_stop_reasons = []
+
+        def _safety_stop(self, reason):
+            self.safety_stop_reasons.append(reason)
+            self.state.fault(f"safety stop: {reason}")
+
+    gui = FakeGui()
+
+    module.OrcaRealtimeGui._process_landmarks(
+        gui,
+        np.zeros((21, 3), dtype=float),
+        now_s=12.0,
+    )
+
+    assert gui.safety_stop_reasons == ["no hand detected"]
+    assert gui.state.state == module.RuntimeState.FAULT
+    assert gui.controller.sent == []
+
+
+def test_single_file_tracking_loss_timeout_starts_when_live_tracking_is_lost():
+    module = load_single_file_module()
+
+    class FakeResettable:
+        def reset(self):
+            pass
+
+    class FakeVar:
+        def set(self, _value):
+            pass
+
+    class FakeGui:
+        def __init__(self):
+            self.state = module.RuntimeStateMachine()
+            self.latest_landmarks = None
+            self.latest_safety_result = None
+            self.hand_var = FakeVar()
+            self.tracking_card_var = FakeVar()
+            self.joint_angles_var = FakeVar()
+            self.safety_var = FakeVar()
+            self.safety_card_var = FakeVar()
+            self.preview_safety_var = FakeVar()
+            self.landmark_smoother = FakeResettable()
+            self.joint_smoother = FakeResettable()
+            self._hand_missing_since = None
+            self._tracking_lost_deadline_s = None
+            self.safety_stop_reason = None
+
+        def _start_tracking_lost_alert(self):
+            pass
+
+        def _safety_stop(self, reason):
+            self.safety_stop_reason = reason
+            self.state.fault(f"safety stop: {reason}")
+
+    gui = FakeGui()
+    module.OrcaRealtimeGui._handle_no_hand(gui, now_s=10.0)
+    gui.state.start_mapping()
+    gui.state.enable_live()
+
+    module.OrcaRealtimeGui._handle_no_hand(gui, now_s=20.0)
+
+    assert gui.state.state == module.RuntimeState.TRACKING_LOST
+    assert gui.safety_stop_reason is None
+    assert gui._hand_missing_since == 20.0
+    assert gui._tracking_lost_deadline_s == 22.0
 
 
 def test_single_file_m_and_l_keys_report_fault_instead_of_fake_mapping_messages(capsys):
