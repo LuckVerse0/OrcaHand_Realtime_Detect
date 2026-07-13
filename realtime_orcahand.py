@@ -1316,7 +1316,7 @@ class SessionLogger:
             time.monotonic() - self._last_flush
         ) >= self._flush_interval_s
 
-    @staticmethod
+    @staticmethod                                                       
     def _serialize(value: Any) -> str:
         if isinstance(value, (dict, list, tuple)):
             return json.dumps(value, ensure_ascii=False, sort_keys=True)
