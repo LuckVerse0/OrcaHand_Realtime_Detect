@@ -2,7 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from orca_realtime.config import load_realtime_config
+import realtime_orcahand as rt
+
+
+load_realtime_config = rt.load_realtime_config
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]

@@ -1,4 +1,4 @@
-# Core runtime for realtime_orcahand_control, realtime_orcahand, and tests
+# Core runtime for realtime_orcahand and tests
 numpy>=2.4.0,<3.0.0
 opencv-contrib-python>=4.13.0
 mediapipe>=0.10.35

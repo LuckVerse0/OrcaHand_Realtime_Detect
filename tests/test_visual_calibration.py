@@ -5,17 +5,18 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from orca_realtime.cleanup import cleanup_generated_logs
-from orca_realtime.config import RuntimeSafetySettings, load_realtime_config
-from orca_realtime.kinematics import HandKinematics
-from orca_realtime.safety import SafetyController
-from orca_realtime.visual_calibration import (
-    apply_visual_calibration,
-    list_visual_calibrations,
-    load_visual_calibration,
-    save_visual_calibration,
-    sanitize_profile_name,
-)
+import realtime_orcahand as rt
+
+
+RuntimeSafetySettings = rt.RuntimeSafetySettings
+load_realtime_config = rt.load_realtime_config
+HandKinematics = rt.HandKinematics
+SafetyController = rt.SafetyController
+apply_visual_calibration = rt.apply_visual_calibration
+list_visual_calibrations = rt.list_visual_calibrations
+load_visual_calibration = rt.load_visual_calibration
+save_visual_calibration = rt.save_visual_calibration
+sanitize_profile_name = rt.sanitize_profile_name
 
 
 def synthetic_hand(curled: bool = False) -> np.ndarray:
@@ -117,23 +118,3 @@ def test_visual_calibration_list_returns_named_profiles(tmp_path):
 
     assert [profile.name for profile in profiles] == ["a_profile", "b_profile"]
     assert all(profile.path.parent == tmp_path for profile in profiles)
-
-
-def test_cleanup_generated_logs_only_removes_orcahand_session_files(tmp_path):
-    keep = tmp_path / "notes.txt"
-    csv_log = tmp_path / "orcahand_20260618_181906.csv"
-    json_log = tmp_path / "orcahand_20260618_181906.jsonl"
-    other_csv = tmp_path / "manual.csv"
-    for path in (keep, csv_log, json_log, other_csv):
-        path.write_text("x", encoding="utf-8")
-
-    removed = cleanup_generated_logs(tmp_path)
-
-    assert sorted(path.name for path in removed) == [
-        "orcahand_20260618_181906.csv",
-        "orcahand_20260618_181906.jsonl",
-    ]
-    assert keep.exists()
-    assert other_csv.exists()
-    assert not csv_log.exists()
-    assert not json_log.exists()

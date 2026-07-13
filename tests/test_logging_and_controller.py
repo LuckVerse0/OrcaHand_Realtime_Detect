@@ -1,7 +1,10 @@
 from pathlib import Path
 
-from orca_realtime.logging_utils import SessionLogger
-from orca_realtime.orca_controller import OrcaController
+import realtime_orcahand as rt
+
+
+SessionLogger = rt.SessionLogger
+OrcaController = rt.OrcaController
 
 
 def test_session_logger_writes_csv_and_jsonl_rows(tmp_path):

@@ -1,9 +1,13 @@
 import numpy as np
 import pytest
 
-from orca_realtime.config import RuntimeSafetySettings, load_realtime_config
-from orca_realtime.kinematics import HandKinematics
-from orca_realtime.safety import SafetyController
+import realtime_orcahand as rt
+
+
+RuntimeSafetySettings = rt.RuntimeSafetySettings
+load_realtime_config = rt.load_realtime_config
+HandKinematics = rt.HandKinematics
+SafetyController = rt.SafetyController
 
 
 def synthetic_hand(curled: bool = False) -> np.ndarray:

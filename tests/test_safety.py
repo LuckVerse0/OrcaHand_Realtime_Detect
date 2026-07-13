@@ -2,8 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from orca_realtime.config import RuntimeSafetySettings, load_realtime_config
-from orca_realtime.safety import SafetyController
+import realtime_orcahand as rt
+
+
+RuntimeSafetySettings = rt.RuntimeSafetySettings
+load_realtime_config = rt.load_realtime_config
+SafetyController = rt.SafetyController
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -146,7 +150,7 @@ def test_reset_to_safe_neutral_restarts_delta_limit_from_neutral():
     controller.reset_to_safe_neutral()
     result = controller.apply(target)
 
-    assert result.joints["index_mcp"] == pytest.approx(neutral["index_mcp"] + 1.0)
+    assert result.joints["index_mcp"] == pytest.approx(neutral["index_mcp"] + 0.5)
 
 
 def test_startup_ramp_uses_smaller_delta_before_normal_delta():

@@ -1,7 +1,12 @@
 import numpy as np
 
-from orca_realtime.filters import ExponentialSmoother, JointSmoother
-from orca_realtime.state import RuntimeState, RuntimeStateMachine
+import realtime_orcahand as rt
+
+
+ExponentialSmoother = rt.ExponentialSmoother
+JointSmoother = rt.JointSmoother
+RuntimeState = rt.RuntimeState
+RuntimeStateMachine = rt.RuntimeStateMachine
 
 
 def test_exponential_smoother_blends_arrays_and_resets():

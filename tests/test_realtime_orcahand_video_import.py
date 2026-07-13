@@ -1,23 +1,13 @@
 from __future__ import annotations
 
-import importlib.util
-import sys
 from pathlib import Path
 
 import numpy as np
-
-
-REALTIME_FILE = Path("realtime_orcahand.py")
+import realtime_orcahand as rt
 
 
 def load_realtime_module():
-    spec = importlib.util.spec_from_file_location("realtime_orcahand_current", REALTIME_FILE)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return rt
 
 
 def fake_processed_video(module):

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from orca_realtime.calibration import CalibrationResult
+import realtime_orcahand as rt
+
+
+CalibrationResult = rt.CalibrationResult
 
 
 def test_calibration_result_loads_yaml_with_integer_motor_ids(tmp_path: Path):

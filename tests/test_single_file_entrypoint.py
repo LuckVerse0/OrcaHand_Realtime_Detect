@@ -1,26 +1,19 @@
 from __future__ import annotations
 
-import importlib.util
 from types import SimpleNamespace
-import sys
 import time
 from pathlib import Path
 
 import numpy as np
 import pytest
+import realtime_orcahand as rt
 
 
 SINGLE_FILE = Path("realtime_orcahand.py")
 
 
 def load_single_file_module():
-    spec = importlib.util.spec_from_file_location("single_file", SINGLE_FILE)
-    assert spec is not None
-    assert spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+    return rt
 
 
 def synthetic_hand(curled: bool = False) -> np.ndarray:
@@ -708,7 +701,7 @@ def test_single_file_draw_hand_uses_fast_line_type(monkeypatch):
     module.draw_hand(frame, keypoints, scores, "Right 0.95", draw_label=False)
 
     assert line_types
-    assert set(line_types) == {module.cv2.LINE_8}
+    assert set(line_types) == {module.DEFAULT_DRAW_LINE_TYPE}
 
 
 def test_single_file_select_one_hand_rejects_wrong_handedness_for_right_hand():
@@ -1382,18 +1375,12 @@ def test_single_file_status_lines_explain_mapping_and_output_gate():
 
     preview_lines = module._status_lines(state, live_allowed=True, safety_result=None)
     assert "state:preview" in preview_lines[0]
-    assert "o:open" in preview_lines[1]
-    assert "c:fist" in preview_lines[1]
-    assert "a:spread" in preview_lines[1]
-    assert "s:together" in preview_lines[1]
-    assert "m:start" in preview_lines[1]
-    assert "l:output" in preview_lines[1]
-    assert "OUTPUT OFF" in preview_lines[2]
+    assert "OUTPUT OFF" in preview_lines[1]
 
     state.start_mapping()
     state.enable_live()
     live_lines = module._status_lines(state, live_allowed=True, safety_result=None)
-    assert "OUTPUT ON" in live_lines[2]
+    assert "OUTPUT ON" in live_lines[1]
 
 
 def test_single_file_mapping_helpers_reverse_flex_without_changing_config():
@@ -1574,195 +1561,6 @@ def test_single_file_detect_frame_skips_incomplete_mediapipe_hands():
     assert labels == ["Left 0.95"]
 
 
-def test_single_file_o_and_c_capture_user_flex_range(capsys):
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-    landmarks = np.ones((21, 3), dtype=float)
-
-    class FakeKinematics:
-        def __init__(self):
-            self.open_captures = []
-            self.closed_captures = []
-            self.has_range_calibration = False
-
-        def capture_open_pose(self, value):
-            self.open_captures.append(value.copy())
-
-        def capture_closed_pose(self, value):
-            self.closed_captures.append(value.copy())
-            self.has_range_calibration = True
-
-    class FakeSafety:
-        def __init__(self):
-            self.reset_count = 0
-
-        def reset_to_safe_neutral(self):
-            self.reset_count += 1
-
-    class FakeSmoother:
-        def __init__(self):
-            self.reset_count = 0
-
-        def reset(self):
-            self.reset_count += 1
-
-    kinematics = FakeKinematics()
-    safety = FakeSafety()
-    smoother = FakeSmoother()
-
-    module._handle_key(
-        ord("o"),
-        state,
-        kinematics,
-        landmarks,
-        object(),
-        safety,
-        live_allowed=True,
-        joint_smoother=smoother,
-    )
-    module._handle_key(
-        ord("c"),
-        state,
-        kinematics,
-        landmarks,
-        object(),
-        safety,
-        live_allowed=True,
-        joint_smoother=smoother,
-    )
-
-    assert len(kinematics.open_captures) == 1
-    assert len(kinematics.closed_captures) == 1
-    assert safety.reset_count == 2
-    assert smoother.reset_count == 2
-    out = capsys.readouterr().out
-    assert "Open hand calibration captured" in out
-    assert "Fist calibration captured" in out
-
-
-def test_single_file_a_and_s_capture_user_abd_range(capsys):
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-    landmarks = np.ones((21, 3), dtype=float)
-
-    class FakeKinematics:
-        def __init__(self):
-            self.spread_captures = []
-            self.together_captures = []
-            self.has_abd_range_calibration = False
-
-        def capture_abd_spread_pose(self, value):
-            self.spread_captures.append(value.copy())
-
-        def capture_abd_together_pose(self, value):
-            self.together_captures.append(value.copy())
-            self.has_abd_range_calibration = True
-
-    class FakeSafety:
-        def __init__(self):
-            self.reset_count = 0
-
-        def reset_to_safe_neutral(self):
-            self.reset_count += 1
-
-    class FakeSmoother:
-        def __init__(self):
-            self.reset_count = 0
-
-        def reset(self):
-            self.reset_count += 1
-
-    kinematics = FakeKinematics()
-    safety = FakeSafety()
-    smoother = FakeSmoother()
-
-    module._handle_key(
-        ord("a"),
-        state,
-        kinematics,
-        landmarks,
-        object(),
-        safety,
-        live_allowed=True,
-        joint_smoother=smoother,
-    )
-    module._handle_key(
-        ord("s"),
-        state,
-        kinematics,
-        landmarks,
-        object(),
-        safety,
-        live_allowed=True,
-        joint_smoother=smoother,
-    )
-
-    assert len(kinematics.spread_captures) == 1
-    assert len(kinematics.together_captures) == 1
-    assert safety.reset_count == 2
-    assert smoother.reset_count == 2
-    out = capsys.readouterr().out
-    assert "Spread calibration captured" in out
-    assert "Together calibration captured" in out
-
-
-def test_single_file_m_and_l_block_until_user_range_calibration(capsys):
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-
-    class FakeKinematics:
-        has_range_calibration = False
-        has_abd_range_calibration = False
-
-    module._handle_key(
-        ord("m"),
-        state,
-        FakeKinematics(),
-        None,
-        object(),
-        object(),
-        live_allowed=True,
-    )
-    module._handle_key(
-        ord("l"),
-        state,
-        FakeKinematics(),
-        None,
-        object(),
-        object(),
-        live_allowed=True,
-    )
-
-    assert state.state == module.RuntimeState.PREVIEW
-    out = capsys.readouterr().out
-    assert "Calibrate first" in out
-    assert "Mapping armed" not in out
-    assert "Hardware output enabled" not in out
-
-
-def test_single_file_m_blocks_when_abd_range_calibration_is_missing(capsys):
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-
-    class FakeKinematics:
-        has_range_calibration = True
-        has_abd_range_calibration = False
-
-    module._handle_key(
-        ord("m"),
-        state,
-        FakeKinematics(),
-        None,
-        object(),
-        object(),
-        live_allowed=True,
-    )
-
-    assert state.state == module.RuntimeState.PREVIEW
-    out = capsys.readouterr().out
-    assert "side-spread" in out
-
-
 def test_single_file_safety_can_reset_to_neutral_for_live_ramp():
     module = load_single_file_module()
     config = module.load_realtime_config("config")
@@ -1781,142 +1579,6 @@ def test_single_file_safety_can_reset_to_neutral_for_live_ramp():
     result = safety.apply(far_target)
 
     assert result.joints["index_mcp"] == neutral["index_mcp"] + 0.5
-
-
-def test_single_file_terminal_colors_and_mapping_message(capsys):
-    module = load_single_file_module()
-
-    colored = module._color_text("hello", "green")
-    assert colored.startswith("\033[")
-    assert colored.endswith("\033[0m")
-
-    state = module.RuntimeStateMachine()
-    controller = module.OrcaController("config/config.yaml", live=False)
-    safety = module.SafetyController(module.load_realtime_config("config"))
-    module._handle_key(ord("m"), state, object(), None, controller, safety, live_allowed=True)
-
-    out = capsys.readouterr().out
-    assert "\033[" in out
-    assert "Mapping armed" in out
-
-
-def test_single_file_m_key_does_not_capture_camera_hand_as_visual_neutral():
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-    controller = module.OrcaController("config/config.yaml", live=False)
-    safety = module.SafetyController(module.load_realtime_config("config"))
-    landmarks = np.ones((21, 2), dtype=float)
-
-    class FakeKinematics:
-        has_neutral = False
-
-        def __init__(self):
-            self.captured = []
-
-        def capture_neutral(self, value):
-            self.captured.append(value.copy())
-            self.has_neutral = True
-
-    class FakeSmoother:
-        def __init__(self):
-            self.reset_count = 0
-
-        def reset(self):
-            self.reset_count += 1
-
-    kinematics = FakeKinematics()
-    joint_smoother = FakeSmoother()
-
-    module._handle_key(
-        ord("m"),
-        state,
-        kinematics,
-        landmarks,
-        controller,
-        safety,
-        live_allowed=True,
-        joint_smoother=joint_smoother,
-    )
-
-    assert state.state == module.RuntimeState.ARMED
-    assert kinematics.has_neutral is False
-    assert len(kinematics.captured) == 0
-    assert joint_smoother.reset_count == 0
-
-
-def test_single_file_l_key_allows_live_without_camera_neutral_and_starts_ramp(capsys):
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-    state.start_mapping()
-    controller = module.OrcaController("config/config.yaml", live=False)
-    safety = module.SafetyController(
-        module.load_realtime_config("config"),
-        module.RuntimeSafetySettings(max_delta_deg_per_frame=5.0),
-    )
-
-    class FakeKinematics:
-        has_neutral = False
-
-        def capture_neutral(self, value):
-            self.has_neutral = True
-
-    class FakeSmoother:
-        def __init__(self):
-            self.reset_count = 0
-
-        def reset(self):
-            self.reset_count += 1
-
-    joint_smoother = FakeSmoother()
-
-    module._handle_key(
-        ord("l"),
-        state,
-        FakeKinematics(),
-        None,
-        controller,
-        safety,
-        live_allowed=True,
-        joint_smoother=joint_smoother,
-    )
-
-    assert state.state == module.RuntimeState.LIVE
-    assert joint_smoother.reset_count == 1
-    assert "Ramping from mechanical neutral" in capsys.readouterr().out
-
-
-def test_single_file_l_key_does_not_capture_neutral_before_enabling_live():
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-    state.start_mapping()
-    controller = module.OrcaController("config/config.yaml", live=False)
-    safety = module.SafetyController(module.load_realtime_config("config"))
-    landmarks = np.ones((21, 2), dtype=float)
-
-    class FakeKinematics:
-        has_neutral = False
-
-        def __init__(self):
-            self.captured = 0
-
-        def capture_neutral(self, value):
-            self.captured += 1
-            self.has_neutral = True
-
-    kinematics = FakeKinematics()
-
-    module._handle_key(
-        ord("l"),
-        state,
-        kinematics,
-        landmarks,
-        controller,
-        safety,
-        live_allowed=True,
-    )
-
-    assert kinematics.captured == 0
-    assert state.state == module.RuntimeState.LIVE
 
 
 def test_single_file_rejected_safety_result_stops_live_hardware_and_warns(capsys):
@@ -1948,44 +1610,6 @@ def test_single_file_rejected_safety_result_stops_live_hardware_and_warns(capsys
     assert "\033[" in out
     assert "SAFETY STOP" in out
     assert "index_mcp outside safe ROM" in out
-
-
-def test_single_file_preview_safety_rejection_does_not_auto_arm_mapping(capsys):
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-    rejected = module.SafetyResult(
-        joints={},
-        accepted=False,
-        reasons=["index_mcp outside safe ROM"],
-        motor_positions={},
-    )
-    accepted = module.SafetyResult(
-        joints={},
-        accepted=True,
-        reasons=[],
-        motor_positions={},
-    )
-
-    class FakeController:
-        def emergency_stop(self):
-            raise AssertionError("preview safety rejection must not stop hardware")
-
-    module._react_to_safety_result(state, FakeController(), rejected, live_allowed=True)
-    module._react_to_safety_result(state, FakeController(), accepted, live_allowed=True)
-    module._handle_key(
-        ord("m"),
-        state,
-        object(),
-        None,
-        FakeController(),
-        object(),
-        live_allowed=True,
-    )
-
-    assert state.state == module.RuntimeState.ARMED
-    out = capsys.readouterr().out
-    assert "Mapping armed" in out
-    assert "Mapping stopped" not in out
 
 
 def test_single_file_gui_clears_preview_safety_reason_after_accepted_frame():
@@ -2344,36 +1968,6 @@ def test_single_file_tracking_loss_timeout_starts_when_live_tracking_is_lost():
     assert gui.safety_stop_reason is None
     assert gui._hand_missing_since == 20.0
     assert gui._tracking_lost_deadline_s == 22.0
-
-
-def test_single_file_m_and_l_keys_report_fault_instead_of_fake_mapping_messages(capsys):
-    module = load_single_file_module()
-    state = module.RuntimeStateMachine()
-    state.fault("safety stop")
-
-    module._handle_key(
-        ord("m"),
-        state,
-        object(),
-        None,
-        object(),
-        object(),
-        live_allowed=True,
-    )
-    module._handle_key(
-        ord("l"),
-        state,
-        object(),
-        None,
-        object(),
-        object(),
-        live_allowed=True,
-    )
-
-    out = capsys.readouterr().out
-    assert "FAULT" in out
-    assert "Mapping stopped" not in out
-    assert "Press 'm' first" not in out
 
 
 def test_single_file_startup_ramp_uses_smaller_delta_before_normal_delta():

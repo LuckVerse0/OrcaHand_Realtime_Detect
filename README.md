@@ -119,9 +119,9 @@ MediaPipe input is downscaled for inference.
 - Keeping `DEFAULT_MAX_DETECTED_HANDS = 2` is intentional. It lets the program
   see both hands and then choose the configured hand, instead of letting
   MediaPipe pick the wrong single hand.
-- The older `realtime_orcahand_control.py` and `tools\mediapipe_hand.py` paths
-  are kept for CLI/demo use and now share the same realtime camera and inference
-  defaults.
+- `realtime_orcahand.py` is the sole runtime implementation and test source.
+  Experimental utilities remain under `tools\` but are not separate runtime
+  entrypoints.
 
 ## Experimental Tools
 
