@@ -2181,7 +2181,7 @@ def test_single_file_gui_transient_no_hand_enters_tracking_lost_without_fault():
     assert gui.joint_smoother.reset_count == 1
 
 
-def test_single_file_gui_sustained_no_hand_safety_stops_after_grace_window():
+def test_single_file_gui_tracking_loss_waits_two_seconds_before_safety_stop():
     module = load_single_file_module()
 
     class FakeResettable:
@@ -2216,11 +2216,14 @@ def test_single_file_gui_sustained_no_hand_safety_stops_after_grace_window():
 
     gui = FakeGui()
 
+    assert module.DEFAULT_TRACKING_LOST_STOP_S == 2.0
     module.OrcaRealtimeGui._handle_no_hand(gui, now_s=10.0)
-    module.OrcaRealtimeGui._handle_no_hand(
-        gui,
-        now_s=10.0 + module.DEFAULT_TRACKING_LOST_STOP_S + 0.01,
-    )
+    module.OrcaRealtimeGui._handle_no_hand(gui, now_s=11.99)
+
+    assert gui.state.state == module.RuntimeState.TRACKING_LOST
+    assert gui.safety_stop_reason is None
+
+    module.OrcaRealtimeGui._handle_no_hand(gui, now_s=12.0)
 
     assert gui.safety_stop_reason == "no hand detected"
     assert gui.state.state == module.RuntimeState.FAULT
@@ -2234,6 +2237,23 @@ def test_single_file_tracking_lost_recovers_to_original_preview_state():
     state.recover_tracking()
 
     assert state.state == module.RuntimeState.PREVIEW
+
+
+def test_single_file_tracking_lost_pauses_output_and_recovers_live_state():
+    module = load_single_file_module()
+    state = module.RuntimeStateMachine()
+    state.start_mapping()
+    state.enable_live()
+
+    state.tracking_lost("no hand detected")
+
+    assert state.state == module.RuntimeState.TRACKING_LOST
+    assert state.can_send_to_hardware is False
+
+    state.recover_tracking()
+
+    assert state.state == module.RuntimeState.LIVE
+    assert state.can_send_to_hardware is True
 
 
 def test_single_file_m_and_l_keys_report_fault_instead_of_fake_mapping_messages(capsys):
